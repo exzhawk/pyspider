@@ -163,7 +163,7 @@ class Scheduler(object):
                 logger.error('%s not in task: %.200r', each, task)
                 return False
         if task['project'] not in self.task_queue:
-            logger.error('unknow project: %s', task['project'])
+            logger.error('unknown project: %s', task['project'])
             return False
         return True
 
@@ -447,6 +447,12 @@ class Scheduler(object):
             return False
         server.register_function(new_task, 'newtask')
 
+        def send_task(task):
+            '''dispatch task to fetcher'''
+            self.send_task(task)
+            return True
+        server.register_function(send_task, 'send_task')
+
         def update_project():
             self._force_update_project = True
         server.register_function(update_project, 'update_project')
@@ -585,7 +591,7 @@ class Scheduler(object):
         '''Called when a task is failed, called by `on_task_status`'''
         old_task = self.taskdb.get_task(task['project'], task['taskid'], fields=['schedule'])
         if old_task is None:
-            logging.error('unknow status pack: %s' % task)
+            logging.error('unknown status pack: %s' % task)
             return
         if not task.get('schedule'):
             task['schedule'] = old_task.get('schedule', {})

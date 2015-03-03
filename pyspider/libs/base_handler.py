@@ -14,7 +14,9 @@ import six
 from six import add_metaclass, iteritems
 
 from pyspider.libs.log import LogFormatter
-from pyspider.libs.url import quote_chinese, _build_url, _encode_params, _encode_multipart_formdata
+from pyspider.libs.url import (
+    quote_chinese, _build_url, _encode_params,
+    _encode_multipart_formdata, curl_to_arguments)
 from pyspider.libs.utils import md5string, hide_me, pretty_unicode
 from pyspider.libs.ListIO import ListO
 from pyspider.libs.response import rebuild_response
@@ -260,12 +262,12 @@ class BaseHandler(object):
         for k, v in iteritems(self.crawl_config):
             kwargs.setdefault(k, v)
 
-        url = quote_chinese(_build_url(url.strip(), kwargs.get('params')))
+        url = quote_chinese(_build_url(url.strip(), kwargs.pop('params', None)))
         if kwargs.get('files'):
             assert isinstance(
                 kwargs.get('data', {}), dict), "data must be a dict when using with files!"
-            content_type, data = _encode_multipart_formdata(kwargs.get('data', {}),
-                                                            kwargs.get('files', {}))
+            content_type, data = _encode_multipart_formdata(kwargs.pop('data', {}),
+                                                            kwargs.pop('files', {}))
             kwargs.setdefault('headers', {})
             kwargs['headers']['Content-Type'] = content_type
             kwargs['data'] = data
@@ -276,8 +278,8 @@ class BaseHandler(object):
 
         schedule = {}
         for key in ('priority', 'retries', 'exetime', 'age', 'itag', 'force_update'):
-            if key in kwargs and kwargs[key] is not None:
-                schedule[key] = kwargs[key]
+            if key in kwargs:
+                schedule[key] = kwargs.pop(key)
         task['schedule'] = schedule
 
         fetch = {}
@@ -295,21 +297,28 @@ class BaseHandler(object):
                 'js_run_at',
                 'js_script',
                 'load_images',
-                'fetch_type'
+                'fetch_type',
+                'use_gzip',
         ):
-            if key in kwargs and kwargs[key] is not None:
-                fetch[key] = kwargs[key]
+            if key in kwargs:
+                fetch[key] = kwargs.pop(key)
         task['fetch'] = fetch
 
         process = {}
         for key in ('callback', ):
-            if key in kwargs and kwargs[key] is not None:
-                process[key] = kwargs[key]
+            if key in kwargs:
+                process[key] = kwargs.pop(key)
         task['process'] = process
 
         task['project'] = self.project_name
         task['url'] = url
-        task['taskid'] = kwargs.get('taskid') or self.get_taskid(task)
+        if 'taskid' in kwargs:
+            task['taskid'] = kwargs.pop('taskid')
+        else:
+            task['taskid'] = self.get_taskid(task)
+
+        if kwargs:
+            raise TypeError('crawl() got unexpected keyword argument: %s' % kwargs.keys())
 
         cache_key = "%(project)s:%(taskid)s" % task
         if cache_key not in self._follows_keys:
@@ -356,6 +365,12 @@ class BaseHandler(object):
 
           full documents: http://pyspider.readthedocs.org/en/latest/apis/self.crawl/
         '''
+
+        if isinstance(url, six.string_types) and url.startswith('curl '):
+            curl_kwargs = curl_to_arguments(url)
+            url = curl_kwargs.pop('urls')
+            for k, v in iteritems(curl_kwargs):
+                kwargs.setdefault(k, v)
 
         if isinstance(url, six.string_types):
             return self._crawl(url, **kwargs)

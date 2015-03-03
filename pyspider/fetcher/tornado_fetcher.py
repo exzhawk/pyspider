@@ -20,7 +20,7 @@ import pyspider
 
 from six.moves import queue, http_cookies
 from requests import cookies
-from six.moves.urllib.parse import urljoin
+from six.moves.urllib.parse import urljoin, urlsplit
 from tornado.curl_httpclient import CurlAsyncHTTPClient
 from tornado.simple_httpclient import SimpleAsyncHTTPClient
 from pyspider.libs import utils, dataurl, counter
@@ -173,7 +173,7 @@ class Fetcher(object):
         self.on_result(type, task, result)
         return task, result
 
-    allowed_options = ['method', 'data', 'timeout', 'cookies']
+    allowed_options = ['method', 'data', 'timeout', 'cookies', 'use_gzip']
 
     def http_fetch(self, url, task, callback):
         '''HTTP fetcher'''
@@ -189,27 +189,46 @@ class Fetcher(object):
                 fetch[each] = task_fetch[each]
         fetch['headers'].update(task_fetch.get('headers', {}))
 
-        track_headers = tornado.httputil.HTTPHeaders(
-            task.get('track', {}).get('fetch', {}).get('headers') or {})
+        if task.get('track'):
+            track_headers = tornado.httputil.HTTPHeaders(
+                task.get('track', {}).get('fetch', {}).get('headers') or {})
+            track_ok = task.get('track', {}).get('process', {}).get('ok', False)
+        else:
+            track_headers = {}
+            track_ok = False
         # proxy
-        if 'proxy' in task_fetch:
-            if isinstance(task_fetch['proxy'], six.string_types):
-                fetch['proxy_host'] = task_fetch['proxy'].split(":")[0]
-                fetch['proxy_port'] = int(task_fetch['proxy'].split(":")[1])
-            elif self.proxy and task_fetch.get('proxy', True):
-                fetch['proxy_host'] = self.proxy.split(":")[0]
-                fetch['proxy_port'] = int(self.proxy.split(":")[1])
+        proxy_string = None
+        if isinstance(task_fetch.get('proxy'), six.string_types):
+            proxy_string = task_fetch['proxy']
+        elif self.proxy and task_fetch.get('proxy', True):
+            proxy_string = self.proxy
+        if proxy_string:
+            if '://' not in proxy_string:
+                proxy_string = 'http://' + proxy_string
+            proxy_splited = urlsplit(proxy_string)
+            if proxy_splited.username:
+                fetch['proxy_username'] = proxy_splited.username
+            if proxy_splited.password:
+                fetch['proxy_password'] = proxy_splited.password
+            fetch['proxy_host'] = proxy_splited.hostname
+            fetch['proxy_port'] = proxy_splited.port or 8080
+
         # etag
         if task_fetch.get('etag', True):
-            _t = task_fetch.get('etag') if isinstance(task_fetch.get('etag'), six.string_types) \
-                else track_headers.get('etag')
+            _t = None
+            if isinstance(task_fetch.get('etag'), six.string_types):
+                _t = task_fetch.get('etag')
+            elif track_ok:
+                _t = track_headers.get('etag')
             if _t:
                 fetch['headers'].setdefault('If-None-Match', _t)
         # last modifed
         if task_fetch.get('last_modified', True):
-            _t = task_fetch.get('last_modifed') \
-                if isinstance(task_fetch.get('last_modifed'), six.string_types) \
-                else track_headers.get('last-modified')
+            _t = None
+            if isinstance(task_fetch.get('last_modifed'), six.string_types):
+                _t = task_fetch.get('last_modifed')
+            elif track_ok:
+                _t = track_headers.get('last-modified')
             if _t:
                 fetch['headers'].setdefault('If-Modified-Since', _t)
 
@@ -297,6 +316,7 @@ class Fetcher(object):
                 else:
                     return handle_error(e)
             except Exception as e:
+                logger.exception(fetch)
                 return handle_error(e)
 
         return make_request(fetch)
